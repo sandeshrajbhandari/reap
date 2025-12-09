@@ -122,7 +122,7 @@ def ttm_online(
     """
     device = activations.device
     pairwise_distances = torch.zeros(
-        (num_experts, num_experts), device=device, dtype=activations[0].dtype
+        (num_experts, num_experts), device=device, dtype=torch.float32
     )
 
     E, S, H = activations.shape

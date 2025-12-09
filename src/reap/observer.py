@@ -350,29 +350,65 @@ class MoETransformerObserver(BaseTransformerObserver):
                 self.state[layer_number] = self._initialize_state(output, num_experts)
             batch_size, sequence_length, hidden_dim = input.shape
             flat_input = input.view(-1, hidden_dim)  # total_seq_len, hidden
-            activations = torch.zeros((num_experts, *flat_input.shape), device=device)
+            activations = torch.zeros((num_experts, *flat_input.shape), device=device, dtype=input.dtype)
 
             if self.hook_config.fused_experts:
                 _, router_scores = output  # (num_experts, total_tokens)
-                router_logits, _, selected_experts = module.router(
-                    flat_input
-                )  # (total_tokens, num_experts)
+                router_output = module.router(flat_input)
+                if len(router_output) == 3:
+                    router_logits, _, selected_experts = router_output
+                else:
+                    router_logits, selected_experts = router_output
                 selected_experts = selected_experts.to(device)
-                router_indices = (
-                    torch.arange(batch_size * sequence_length, device=device)
-                    .view(1, -1)
-                    .expand(router_scores.size(0), -1)
-                )
-                router_indices = router_indices.reshape(-1, 1).expand(-1, hidden_dim)
-                routed_in = torch.gather(
-                    input=flat_input,
-                    dim=0,
-                    index=router_indices,
-                ).to(device)
-                # we do not apply router_scores
-                # record unweighted activations for all experts
-                routed_out = module.experts(routed_in)
-                activations = routed_out.view(num_experts, *flat_input.shape)
+                print("module.experts class name:", module.experts.__class__.__name__)
+                
+                if module.experts.__class__.__name__ == "GptOssExperts":
+                    print("GptOssExperts detected")
+                    experts_module = module.experts
+
+                    try:
+                        gup = experts_module.gate_up_proj
+                        # print(f"DEBUG: type(gate_up_proj): {type(gup)}")
+                        # print(f"DEBUG: gate_up_proj is tensor: {torch.is_tensor(gup)}")
+                        # print(f"DEBUG: gate_up_proj shape: {gup.shape}")
+                    except Exception as e:
+                        print(f"DEBUG: Error inspecting gate_up_proj: {e}")
+
+                    for i in range(num_experts):
+                        mask = (selected_experts == i).any(dim=-1)
+                        if not mask.any():
+                            continue
+                        inp = flat_input[mask]
+                        # print ("gat_up_proj shape", experts_module.gate_up_proj.shape)
+                        # print (experts_module.down_proj.data)
+                        # print ("gat_up_proj .data",experts_module.gate_up_proj.data)
+                        # print ("gat_up_proj .data.shape",experts_module.gate_up_proj.data.shape)
+                        # GptOss computations
+                        gate_up = inp @ experts_module.gate_up_proj[i] + experts_module.gate_up_proj_bias[i]
+                        gate, up = gate_up[..., ::2], gate_up[..., 1::2]
+                        gate = gate.clamp(min=None, max=experts_module.limit)
+                        up = up.clamp(min=-experts_module.limit, max=experts_module.limit)
+                        glu = gate * torch.sigmoid(gate * experts_module.alpha)
+                        out = (up + 1) * glu
+                        out = out @ experts_module.down_proj[i] + experts_module.down_proj_bias[i]
+
+                        activations[i, mask] = out
+                else:
+                    router_indices = (
+                        torch.arange(batch_size * sequence_length, device=device)
+                        .view(1, -1)
+                        .expand(router_scores.size(0), -1)
+                    )
+                    router_indices = router_indices.reshape(-1, 1).expand(-1, hidden_dim)
+                    routed_in = torch.gather(
+                        input=flat_input,
+                        dim=0,
+                        index=router_indices,
+                    ).to(device)
+                    # we do not apply router_scores
+                    # record unweighted activations for all experts
+                    routed_out = module.experts(routed_in)
+                    activations = routed_out.view(num_experts, *flat_input.shape)
 
             else:  # loop based MoE execution
                 # ernie returns combined_output, combine_weights, router_loss, gate_logits

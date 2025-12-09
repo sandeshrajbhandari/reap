@@ -179,8 +179,21 @@ def prune(
                 retained_expert_indicies
             ]
             moe.experts.down_proj.data = moe.experts.down_proj[retained_expert_indicies]
+            if hasattr(moe.experts, "gate_up_proj_bias"):
+                moe.experts.gate_up_proj_bias.data = moe.experts.gate_up_proj_bias[
+                    retained_expert_indicies
+                ]
+            if hasattr(moe.experts, "down_proj_bias"):
+                moe.experts.down_proj_bias.data = moe.experts.down_proj_bias[
+                    retained_expert_indicies
+                ]
             moe.num_experts = len(retained_expert_indicies)
+            if hasattr(moe.experts, "num_experts"):
+                moe.experts.num_experts = len(retained_expert_indicies)
+
             moe.router.weight.data = moe.router.weight.data[retained_expert_indicies]
+            if hasattr(moe.router, "bias"):
+                moe.router.bias.data = moe.router.bias.data[retained_expert_indicies]
             moe.router.out_features = len(retained_expert_indicies)
             if hasattr(moe.router, "num_experts"):  # transformers >= 4.54+
                 moe.router.num_experts = len(retained_expert_indicies)
@@ -188,6 +201,8 @@ def prune(
     # patch config and dump
     logger.info("Saving pruned model...")
     retained_experts = len(retained_expert_indicies)
+    if hasattr(model, "num_experts"):
+        model.num_experts = retained_experts
     setattr(model.config, model_attrs["num_experts"], retained_experts)
     if model.__class__.__name__ == "Ernie4_5_MoeForCausalLM":  # remote-code verson
         model.config.moe_capacity = [
@@ -325,7 +340,7 @@ def main():
 
         # smoke test
         if reap_args.smoke_test:
-            logger.info("Running smoke test on the merged model...")
+            logger.info("Running smoke test on the pruned model...")
             try:
                 smoke_test(model, tokenizer)
             except Exception as e:
