@@ -353,38 +353,26 @@ class MoETransformerObserver(BaseTransformerObserver):
             activations = torch.zeros((num_experts, *flat_input.shape), device=device)
 
             if self.hook_config.fused_experts:
-                hidden_states, router_scores = output
-                router_logits, _, selected_experts = module.router(flat_input)
+                _, router_scores = output  # (num_experts, total_tokens)
+                router_logits, _, selected_experts = module.router(
+                    flat_input
+                )  # (total_tokens, num_experts)
                 selected_experts = selected_experts.to(device)
-
-                experts_module = module.experts
-                for i in range(num_experts):
-                    intermediate_size = 1440
-                    expert_slice_dim = 2 * intermediate_size
-
-                    # Slicing gate_up_proj (2D fused tensor)
-                    start_idx = i * expert_slice_dim
-                    end_idx = (i + 1) * expert_slice_dim
-                    expert_gate_up_weight = experts_module.gate_up_proj.data[:, start_idx:end_idx]
-
-                    # The bias is not fused, it's (num_experts, 2 * intermediate_size)
-                    expert_gate_up_bias = experts_module.gate_up_proj_bias.data[i]
-                    
-                    gate_up = torch.matmul(flat_input, expert_gate_up_weight) + expert_gate_up_bias
-                    gate, up = gate_up.chunk(2, dim=-1)
-
-                    # GLU
-                    gate = gate.clamp(min=None, max=experts_module.limit)
-                    up = up.clamp(min=-experts_module.limit, max=experts_module.limit)
-                    glu = gate * torch.sigmoid(gate * experts_module.alpha)
-                    gated_output = (up + 1) * glu
-
-                    # down_proj (3D tensor) & bias (2D tensor)
-                    expert_down_weight = experts_module.down_proj.data[i]
-                    expert_down_bias = experts_module.down_proj_bias.data[i]
-
-                    out = torch.matmul(gated_output, expert_down_weight) + expert_down_bias
-                    activations[i] = out
+                router_indices = (
+                    torch.arange(batch_size * sequence_length, device=device)
+                    .view(1, -1)
+                    .expand(router_scores.size(0), -1)
+                )
+                router_indices = router_indices.reshape(-1, 1).expand(-1, hidden_dim)
+                routed_in = torch.gather(
+                    input=flat_input,
+                    dim=0,
+                    index=router_indices,
+                ).to(device)
+                # we do not apply router_scores
+                # record unweighted activations for all experts
+                routed_out = module.experts(routed_in)
+                activations = routed_out.view(num_experts, *flat_input.shape)
 
             else:  # loop based MoE execution
                 # ernie returns combined_output, combine_weights, router_loss, gate_logits
@@ -577,7 +565,6 @@ class MoETransformerObserver(BaseTransformerObserver):
             gc.collect()
 
         return _hook_fn
-
 
 # --- Concrete Config Implementations ----
 
