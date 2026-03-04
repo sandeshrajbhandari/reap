@@ -20,9 +20,9 @@ dependencies = [
     # "transformers==4.53.3",  # latest version working for ernie.
     "transformers==4.55.0",
     "umap-learn>=0.5.7",
-    "vllm==0.10.0",
+    # "vllm==0.10.0",
     "livecodebench",
-    "deepspeed>=0.17.4",
+    # "deepspeed>=0.17.4",
     "trl>=0.21.0",
     "hatchling>=1.27.0",
     # "flash-attn>=2.7.1,<=2.8.0", # required for xformers for Llama4. Might need to manually install with --no-build-isolation
@@ -62,4 +62,3 @@ dev = [
 [tool.ruff]
 line-length = 88
 select = ["SIM"]
-

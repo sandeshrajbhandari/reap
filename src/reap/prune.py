@@ -191,12 +191,16 @@ def prune(
             if hasattr(moe.experts, "num_experts"):
                 moe.experts.num_experts = len(retained_expert_indicies)
 
-            moe.router.weight.data = moe.router.weight.data[retained_expert_indicies]
-            if hasattr(moe.router, "bias"):
-                moe.router.bias.data = moe.router.bias.data[retained_expert_indicies]
-            moe.router.out_features = len(retained_expert_indicies)
-            if hasattr(moe.router, "num_experts"):  # transformers >= 4.54+
-                moe.router.num_experts = len(retained_expert_indicies)
+            router = getattr(moe, "router", getattr(moe, "gate", None))
+            if router is None:
+                raise AttributeError(f"MoE block {type(moe)} has neither 'router' nor 'gate' attribute")
+
+            router.weight.data = router.weight.data[retained_expert_indicies]
+            if hasattr(router, "bias") and router.bias is not None:
+                router.bias.data = router.bias.data[retained_expert_indicies]
+            router.out_features = len(retained_expert_indicies)
+            if hasattr(router, "num_experts"):  # transformers >= 4.54+
+                router.num_experts = len(retained_expert_indicies)
 
     # patch config and dump
     logger.info("Saving pruned model...")
