@@ -222,6 +222,7 @@ class MoETransformerObserverConfig(BaseTransformerObserverHookConfig):
     distance_measure: str = "angular"
     renormalize_router_weights: bool = False
     record_pruning_metrics_only: bool = False
+    router_attr_name: str = "router"
 
 
 class MoETransformerObserver(BaseTransformerObserver):
@@ -337,13 +338,16 @@ class MoETransformerObserver(BaseTransformerObserver):
                 "HookConfig settings."
             )
 
+        router_attr = self.hook_config.router_attr_name
+
         @torch.no_grad()
         def _hook_fn(module, args, output):
-            if not len(output) >= 2:
-                raise ValueError(
-                    f"Expected output of module {module.__class__.__name__} at layer "
-                    f"{layer_number} to be a tuple of at least length 2, got {len(output)}."
-                )
+            # Normalize output: some MoE blocks return a single tensor instead of a tuple
+            if isinstance(output, torch.Tensor):
+                output = (output,)
+            elif not isinstance(output, tuple):
+                output = tuple(output)
+
             input = args[0]  # (batch_size, seq_len, hidden_dim)
             device = input.device
             if layer_number not in self.state:
@@ -353,36 +357,22 @@ class MoETransformerObserver(BaseTransformerObserver):
             activations = torch.zeros((num_experts, *flat_input.shape), device=device, dtype=input.dtype)
 
             if self.hook_config.fused_experts:
-                _, router_scores = output  # (num_experts, total_tokens)
-                router_output = module.router(flat_input)
+                router_module = getattr(module, router_attr)
+                router_output = router_module(flat_input)
                 if len(router_output) == 3:
                     router_logits, _, selected_experts = router_output
                 else:
                     router_logits, selected_experts = router_output
                 selected_experts = selected_experts.to(device)
-                print("module.experts class name:", module.experts.__class__.__name__)
-                
-                if module.experts.__class__.__name__ == "GptOssExperts":
-                    print("GptOssExperts detected")
+
+                experts_class_name = module.experts.__class__.__name__
+                if experts_class_name == "GptOssExperts":
                     experts_module = module.experts
-
-                    try:
-                        gup = experts_module.gate_up_proj
-                        # print(f"DEBUG: type(gate_up_proj): {type(gup)}")
-                        # print(f"DEBUG: gate_up_proj is tensor: {torch.is_tensor(gup)}")
-                        # print(f"DEBUG: gate_up_proj shape: {gup.shape}")
-                    except Exception as e:
-                        print(f"DEBUG: Error inspecting gate_up_proj: {e}")
-
                     for i in range(num_experts):
                         mask = (selected_experts == i).any(dim=-1)
                         if not mask.any():
                             continue
                         inp = flat_input[mask]
-                        # print ("gat_up_proj shape", experts_module.gate_up_proj.shape)
-                        # print (experts_module.down_proj.data)
-                        # print ("gat_up_proj .data",experts_module.gate_up_proj.data)
-                        # print ("gat_up_proj .data.shape",experts_module.gate_up_proj.data.shape)
                         # GptOss computations
                         gate_up = inp @ experts_module.gate_up_proj[i] + experts_module.gate_up_proj_bias[i]
                         gate, up = gate_up[..., ::2], gate_up[..., 1::2]
@@ -391,9 +381,23 @@ class MoETransformerObserver(BaseTransformerObserver):
                         glu = gate * torch.sigmoid(gate * experts_module.alpha)
                         out = (up + 1) * glu
                         out = out @ experts_module.down_proj[i] + experts_module.down_proj_bias[i]
-
                         activations[i, mask] = out
+
+                elif experts_class_name == "Qwen3_5MoeExperts":
+                    experts_module = module.experts
+                    act_fn = experts_module.act_fn
+                    for i in range(num_experts):
+                        mask = (selected_experts == i).any(dim=-1)
+                        if not mask.any():
+                            continue
+                        inp = flat_input[mask]
+                        gate, up = nn.functional.linear(inp, experts_module.gate_up_proj[i]).chunk(2, dim=-1)
+                        out = nn.functional.linear(act_fn(gate) * up, experts_module.down_proj[i])
+                        activations[i, mask] = out
+
                 else:
+                    # Generic fused fallback (e.g. Llama4)
+                    _, router_scores = output  # (num_experts, total_tokens)
                     router_indices = (
                         torch.arange(batch_size * sequence_length, device=device)
                         .view(1, -1)
@@ -664,6 +668,7 @@ class Qwen3_5MoEObserverHookConfig(MoETransformerObserverConfig):
     num_experts_attr_name: str = "experts.num_experts"
     top_k_attr_name: str = "gate.top_k"
     fused_experts: bool = True
+    router_attr_name: str = "gate"
 
 
 OBSERVER_CONFIG_REGISTRY = {
