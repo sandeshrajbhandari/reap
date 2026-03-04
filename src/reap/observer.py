@@ -658,6 +658,14 @@ class GptOssMoEObserverHookConfig(MoETransformerObserverConfig):
     fused_experts: bool = True
 
 
+@dataclass
+class Qwen3_5MoEObserverHookConfig(MoETransformerObserverConfig):
+    module_class_name_to_hook_regex: Optional[str] = "Qwen3_5MoeSparseMoeBlock"
+    num_experts_attr_name: str = "experts.num_experts"
+    top_k_attr_name: str = "gate.top_k"
+    fused_experts: bool = True
+
+
 OBSERVER_CONFIG_REGISTRY = {
     "Qwen3MoeForCausalLM": Qwen3MoEObserverHookConfig,
     "NonUniformQwen3MoeForCausalLM": Qwen3MoEObserverHookConfig,
@@ -668,4 +676,5 @@ OBSERVER_CONFIG_REGISTRY = {
     "Ernie4_5_MoeForCausalLM": Ernie4_5MoEObserverHookConfig,
     "Glm4MoeForCausalLM": Glm44MoEObserverHookConfig,
     "GptOssForCausalLM": GptOssMoEObserverHookConfig,
+    "Qwen3_5MoeForCausalLM": Qwen3_5MoEObserverHookConfig,
 }
