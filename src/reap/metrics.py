@@ -147,7 +147,7 @@ def ttm_online(
     # For each of the S*K selections, we have E distances.
     # We need to add these E distances to the correct row in the temp matrix.
     # The row index is given by the selected expert index.
-    pairwise_distances.scatter_add_(0, idx0.unsqueeze(-1).expand(-1, E), flat_dists)
+    pairwise_distances.scatter_add_(0, idx0.unsqueeze(-1).expand(-1, E), flat_dists.to(pairwise_distances.dtype))
 
     # Symmetrize the matrices, add i,j to j,i
     pairwise_distances = pairwise_distances + pairwise_distances.T
