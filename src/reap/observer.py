@@ -382,10 +382,6 @@ class MoETransformerObserver(BaseTransformerObserver):
                 self.state[layer_number] = self._initialize_state(output, num_experts)
             batch_size, sequence_length, hidden_dim = input.shape
             flat_input = input.view(-1, hidden_dim)  # total_seq_len, hidden
-<<<<<<< HEAD
-            activations = torch.zeros((num_experts, *flat_input.shape), device=device, dtype=input.dtype)
-=======
-
             attention_mask = self._current_attention_mask
             if attention_mask is not None:
                 # Flatten mask to match flat_input: (batch_size * seq_len,)
@@ -394,8 +390,7 @@ class MoETransformerObserver(BaseTransformerObserver):
                 # No mask provided - treat all tokens as valid
                 flat_mask = None
 
-            activations = torch.zeros((num_experts, *flat_input.shape), device=device)
->>>>>>> 2b114e7 (Support composite calibration dataset (#16))
+            activations = torch.zeros((num_experts, *flat_input.shape), device=device, dtype=input.dtype)
 
             if self.hook_config.fused_experts:
                 router_module = getattr(module, router_attr)
